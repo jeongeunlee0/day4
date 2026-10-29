@@ -1,0 +1,7 @@
+.vercel
+.env*
+frames/
+test/
+*.blend
+*.blend1
+render_log.txt

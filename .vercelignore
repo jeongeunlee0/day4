@@ -1,0 +1,8 @@
+frames
+test
+dem
+*.blend
+*.blend1
+*.py
+render_log.txt
+.env.local
