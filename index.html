@@ -57,10 +57,23 @@ canvas{display:block;position:fixed;inset:0}
 .toast{padding:8px 22px;font-size:19px;animation:toast 2.4s forwards;white-space:nowrap}
 .float{position:fixed;pointer-events:none;font-size:24px;color:#fff;text-shadow:-2px -2px 0 #e0457b,2px -2px 0 #e0457b,-2px 2px 0 #e0457b,2px 2px 0 #e0457b;animation:floatup 1.3s ease-out forwards;transform:translate(-50%,-50%);z-index:5}
 .float.gold{color:#ffe066;text-shadow:-2px -2px 0 #b36b00,2px -2px 0 #b36b00,-2px 2px 0 #b36b00,2px 2px 0 #b36b00;font-size:30px}
-#shop{position:fixed;inset:0;background:rgba(60,20,80,.45);display:none;place-items:center;z-index:20}
-#shop.open{display:grid}
-#shopbox{width:min(520px,92vw);padding:22px;animation:pop .4s}
-#shopbox h2{color:#ff5c8a;font-size:28px;text-align:center;margin-bottom:12px}
+#shop,#auth{position:fixed;inset:0;background:rgba(60,20,80,.45);display:none;place-items:center;z-index:20}
+#auth{z-index:60}
+#shop.open,#auth.open{display:grid}
+#shopbox,#authbox{width:min(520px,92vw);max-height:92vh;overflow:auto;padding:22px;animation:pop .4s}
+#shopbox h2,#authbox h2{color:#ff5c8a;font-size:28px;text-align:center;margin-bottom:12px}
+#cart{margin-top:14px;padding:12px;background:#fff8fb;border:3px dashed #ffb3cc;border-radius:16px}
+#cart h3{color:#ff5c8a;font-size:18px;margin-bottom:6px}
+.crow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:15px}
+.crow .nm{flex:1}
+.qbtn{width:28px;height:28px;border-radius:50%;border:2px solid #ffb3cc;background:#fff;color:#ff5c8a;font-size:16px;cursor:pointer;font-family:inherit}
+.ctotal{display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:17px}
+.btn.sm{font-size:16px;padding:6px 12px}
+.btn[disabled]{filter:grayscale(.8);opacity:.6;cursor:not-allowed}
+#authbox input{width:100%;box-sizing:border-box;margin:6px 0;padding:10px 12px;font-size:16px;font-family:inherit;border:3px solid #ffd0e0;border-radius:14px;outline:none}
+#authbox input:focus{border-color:#ff5c8a}
+#authmsg{min-height:22px;margin:6px 0;font-size:14px;text-align:center;color:#c93d72}
+.arow{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}
 .item{display:flex;align-items:center;gap:12px;padding:10px;margin:8px 0;background:#fff;border-radius:16px;border:3px solid #ffd0e0}
 .item .ic{font-size:36px}
 .item .tx{flex:1;font-size:15px}
@@ -95,6 +108,7 @@ canvas{display:block;position:fixed;inset:0}
     🍊 감귤 트램펄린을 밟고 높이 점프해서 ⭐을 모아요! (혼저 옵서예~)
   </div>
   <button class="btn" id="startbtn" style="font-size:30px;padding:14px 46px">▶ 텃밭 시작!</button>
+  <button class="btn sm" id="tAuth">👤 로그인</button>
   <div id="loadmsg">3D 세계 불러오는 중…</div>
 </div>
 
@@ -107,6 +121,7 @@ canvas{display:block;position:fixed;inset:0}
   <div id="topbtns">
     <button class="btn" id="bMusic">🎵</button>
     <button class="btn" id="bVoice">🗣️</button>
+    <button class="btn" id="bAuth">👤</button>
     <button class="btn" id="bShop">🛒 상점</button>
   </div>
   <div id="quests" class="glass"><h3>📜 오늘의 퀘스트</h3><div id="qlist"></div></div>
@@ -123,12 +138,27 @@ canvas{display:block;position:fixed;inset:0}
   </div>
 </div>
 
-<div id="shop"><div id="shopbox" class="glass"><h2>🛒 하르방 상점</h2><div id="shopitems"></div><div style="text-align:center;margin-top:12px"><button class="btn" id="shopclose">닫기 (Esc)</button></div></div></div>
+<div id="shop"><div id="shopbox" class="glass"><h2>🛒 하르방 상점</h2><div id="shopitems"></div><div id="cart"></div><div style="text-align:center;margin-top:12px"><button class="btn" id="shopclose">닫기 (Esc)</button></div></div></div>
+
+<div id="auth"><div id="authbox" class="glass">
+  <h2>👤 하르방 계정</h2>
+  <div id="authin">
+    <input id="aemail" type="email" placeholder="이메일" autocomplete="email">
+    <input id="apass" type="password" placeholder="비밀번호 (6자 이상)" autocomplete="current-password">
+    <div id="authmsg"></div>
+    <div class="arow"><button class="btn sm" id="aLogin">로그인</button><button class="btn sm" id="aSignup">회원가입</button></div>
+  </div>
+  <div id="authout" style="display:none;text-align:center">
+    <p id="authwho" style="margin:8px 0 14px"></p>
+    <div class="arow"><button class="btn sm" id="aLogout">로그아웃</button></div>
+  </div>
+  <div class="arow"><button class="btn sm" id="aclose">닫기 (Esc)</button></div>
+</div></div>
 
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
 <script type="module">
 import * as THREE from 'three';
-import { startCloudSync, scheduleCloudSave } from './supabase-sync.js';
+import { startCloudSync, scheduleCloudSave, authState, signUp, signIn, signOut } from './supabase-sync.js';
 
 /* ================= 유틸 ================= */
 const $ = id => document.getElementById(id);
@@ -611,23 +641,80 @@ function progressQuest(type, n = 1) {
 
 /* ================= 상점 ================= */
 const UPG = [
-  { ic: '🪣', name: '큰 물뿌리개', desc: '물 용량 +4', lv: () => S.waterLv, max: 5, cost: () => 40 + S.waterLv * 45, buy: () => { S.waterLv++; S.maxWater += 4; S.water = S.maxWater; } },
-  { ic: '🌱', name: '반짝 비료', desc: '작물 성장 속도 +20%', lv: () => S.growthLv, max: 5, cost: () => 60 + S.growthLv * 60, buy: () => { S.growthLv++; } },
-  { ic: '👢', name: '날쌘 장화', desc: '이동 속도 +12%', lv: () => S.speedLv, max: 4, cost: () => 50 + S.speedLv * 50, buy: () => { S.speedLv++; } },
+  { ic: '🪣', name: '큰 물뿌리개', desc: '물 용량 +4', lv: () => S.waterLv, max: 5, cost: (l = S.waterLv) => 40 + l * 45, buy: () => { S.waterLv++; S.maxWater += 4; S.water = S.maxWater; } },
+  { ic: '🌱', name: '반짝 비료', desc: '작물 성장 속도 +20%', lv: () => S.growthLv, max: 5, cost: (l = S.growthLv) => 60 + l * 60, buy: () => { S.growthLv++; } },
+  { ic: '👢', name: '날쌘 장화', desc: '이동 속도 +12%', lv: () => S.speedLv, max: 4, cost: (l = S.speedLv) => 50 + l * 50, buy: () => { S.speedLv++; } },
   { ic: '🌧️', name: '비 오게 하기', desc: '모든 밭에 물을 듬뿍!', lv: () => 0, max: 99, cost: () => 70, buy: () => startRain(25) },
 ];
+const cart = UPG.map(() => 0);
+const cartLimit = u => u.max >= 99 ? 9 : u.max - u.lv();
+const cartCost = (u, n) => { let t = 0; for (let k = 0; k < n; k++) t += u.cost(u.lv() + k); return t; };
+const cartTotal = () => UPG.reduce((t, u, i) => t + cartCost(u, cart[i]), 0);
 function openShop() { sfx('open'); drawShop(); $('shop').classList.add('open'); }
+function addToCart(i, d) {
+  const n = cart[i] + d;
+  if (n < 0 || n > cartLimit(UPG[i])) { sfx('err'); return; }
+  cart[i] = n; sfx('pop'); drawShop();
+}
+function checkout() {
+  const total = cartTotal();
+  if (!total) return;
+  if (S.coins < total) { sfx('err'); toast(`코인이 부족해요! (🪙${total - S.coins} 더 필요)`); return; }
+  S.coins -= total;
+  UPG.forEach((u, i) => { for (let k = 0; k < cart[i]; k++) u.buy(); cart[i] = 0; });
+  sfx('level'); confetti(40); toast(`🛍️ 구매 완료! -${total}🪙`); updateHUD(); drawShop(); save();
+}
 function drawShop() {
   $('shopitems').innerHTML = '';
-  UPG.forEach(u => {
-    const maxed = u.lv() >= u.max, d = document.createElement('div'); d.className = 'item';
+  UPG.forEach((u, i) => {
+    const full = cartLimit(u) - cart[i] <= 0, d = document.createElement('div'); d.className = 'item';
     d.innerHTML = `<div class="ic">${u.ic}</div><div class="tx"><b>${u.name}</b> ${u.max < 99 ? `(Lv.${u.lv()}/${u.max})` : ''}<br>${u.desc}</div>`;
-    const b = document.createElement('button'); b.className = 'btn'; b.style.fontSize = '16px'; b.textContent = maxed ? 'MAX' : `🪙 ${u.cost()}`;
-    b.onclick = () => { if (maxed) return; if (S.coins < u.cost()) { sfx('err'); toast('코인이 부족해요!'); return; } S.coins -= u.cost(); u.buy(); sfx('level'); confetti(30); updateHUD(); drawShop(); };
+    const b = document.createElement('button'); b.className = 'btn'; b.style.fontSize = '16px'; b.disabled = full;
+    b.textContent = u.lv() >= u.max ? 'MAX' : full ? '담음' : `🛒 담기 🪙${u.cost(u.lv() + cart[i])}`;
+    b.onclick = () => addToCart(i, 1);
     d.appendChild(b); $('shopitems').appendChild(d);
   });
+  drawCart();
+}
+function drawCart() {
+  const box = $('cart'), total = cartTotal();
+  box.innerHTML = '<h3>🧺 장바구니</h3>';
+  if (!total) { box.innerHTML += '<div style="color:#a08;font-size:14px">비어 있어요. 위에서 아이템을 담아 보세요!</div>'; return; }
+  UPG.forEach((u, i) => {
+    if (!cart[i]) return;
+    const r = document.createElement('div'); r.className = 'crow';
+    r.innerHTML = `<span>${u.ic}</span><span class="nm">${u.name} ×${cart[i]}</span><span>🪙${cartCost(u, cart[i])}</span>`;
+    const m = document.createElement('button'), p = document.createElement('button');
+    m.className = p.className = 'qbtn'; m.textContent = '−'; p.textContent = '+';
+    m.onclick = () => addToCart(i, -1); p.onclick = () => addToCart(i, 1);
+    r.append(m, p); box.appendChild(r);
+  });
+  const t = document.createElement('div'); t.className = 'ctotal';
+  t.innerHTML = `<span>합계 <b style="color:${S.coins < total ? '#d33' : '#c27a00'}">🪙${total}</b> <small>(보유 🪙${S.coins})</small></span>`;
+  const buy = document.createElement('button'); buy.className = 'btn sm'; buy.textContent = '구매하기';
+  buy.onclick = checkout; t.appendChild(buy); box.appendChild(t);
 }
 const closeShop = () => $('shop').classList.remove('open');
+
+/* ================= 계정 ================= */
+async function openAuth() {
+  const st = await authState();
+  $('authmsg').textContent = st.mode === 'off' ? 'Supabase 설정이 필요해요' : '';
+  $('authin').style.display = st.mode === 'user' ? 'none' : '';
+  $('authout').style.display = st.mode === 'user' ? '' : 'none';
+  $('authwho').textContent = st.mode === 'user' ? `${st.email} 님으로 로그인 중` : '';
+  $('aSignup').title = '지금 진행 상황을 계정으로 만들어요';
+  sfx('open'); $('auth').classList.add('open');
+}
+const closeAuth = () => $('auth').classList.remove('open');
+async function submitAuth(fn) {
+  const email = $('aemail').value.trim(), pw = $('apass').value;
+  if (!email || pw.length < 6) { $('authmsg').textContent = '이메일과 6자 이상 비밀번호를 입력해 주세요'; sfx('err'); return; }
+  $('authmsg').textContent = '잠시만요…';
+  const r = await fn(email, pw);
+  $('authmsg').textContent = r.message; sfx(r.ok ? 'level' : 'err');
+  if (r.ok) { $('apass').value = ''; setTimeout(closeAuth, 1800); }
+}
 
 /* ================= 날씨/시간 ================= */
 const W = { rain: 0, rainLeft: 0, nextRain: 70 + Math.random() * 60, flash: 0 };
@@ -666,11 +753,12 @@ function updateSky(dt) {
 const keys = {};
 let camYaw = 0, camPitch = .95, camDist = 13, started = false;
 addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') { if (e.key === 'Escape') closeAuth(); return; }
   if (!started) return; const k = e.key.toLowerCase(); keys[k] = true;
   if (k === ' ' || e.code === 'Space') { e.preventDefault(); if (!e.repeat) jump(); }
   if (k === 'e' || k === 'enter') doAction();
   if (k === 'b') $('shop').classList.contains('open') ? closeShop() : openShop();
-  if (k === 'escape') closeShop();
+  if (k === 'escape') { closeShop(); closeAuth(); }
   if (k === 'm') setMusic(!S.music);
   if (k === 'v') toggleVoice();
   if (k >= '1' && k <= '4') selectCrop(+k - 1);
@@ -681,6 +769,9 @@ function toggleVoice() { S.voice = !S.voice; $('bVoice').classList.toggle('off',
 $('bMusic').onclick = () => setMusic(!S.music); $('bVoice').onclick = toggleVoice; $('bShop').onclick = openShop; $('shopclose').onclick = closeShop;
 $('bAct').onclick = () => doAction(); $('bJump').onclick = () => jump();
 $('shop').onclick = e => { if (e.target.id === 'shop') closeShop(); };
+$('bAuth').onclick = $('tAuth').onclick = openAuth; $('aclose').onclick = closeAuth;
+$('aLogin').onclick = () => submitAuth(signIn); $('aSignup').onclick = () => submitAuth(signUp); $('aLogout').onclick = signOut;
+$('auth').onclick = e => { if (e.target.id === 'auth') closeAuth(); };
 let drag = null;
 renderer.domElement.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, moved: 0 }; });
 addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.moved += Math.abs(dx) + Math.abs(dy); drag.x = e.clientX; drag.y = e.clientY; if (drag.moved > 6) { camYaw -= dx * .006; camPitch = clamp(camPitch + dy * .004, .35, 1.35); } });
