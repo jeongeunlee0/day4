@@ -75,8 +75,9 @@ const fail = error => ({ ok: false, message: friendly(error.message) });
 // Turns the current guest into an email account, so the existing progress is kept.
 export async function signUp(nick, password) {
   if (!(await init())) return { ok: false, message: 'Supabase 설정이 필요해요' };
-  const { error } = await client.auth.updateUser({ email: toEmail(nick), password });
+  const { data, error } = await client.auth.updateUser({ email: toEmail(nick), password });
   if (error) return fail(error);
+  user = data.user;
   await push();
   return { ok: true, message: '가입 완료! 이제 어디서든 로그인할 수 있어요 🎉' };
 }
