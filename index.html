@@ -128,6 +128,7 @@ canvas{display:block;position:fixed;inset:0}
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
 <script type="module">
 import * as THREE from 'three';
+import { startCloudSync, scheduleCloudSave } from './supabase-sync.js';
 
 /* ================= 유틸 ================= */
 const $ = id => document.getElementById(id);
@@ -149,6 +150,7 @@ const S = {
   sel: 0, day: 1, time: 0.22, music: true, voice: true,
   stats: { harvest: 0, water: 0, jump: 0, coins: 0, eggs: 0, star: 0 },
 };
+startCloudSync();
 const SAVE_KEY = 'dolhareubang_jeju_v1';
 let saved = null;
 try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) {}
@@ -872,6 +874,7 @@ function updateCamera(dt) {
 }
 function save() {
   try { localStorage.setItem(SAVE_KEY, JSON.stringify({ S, quests, plots: plots.map(p => ({ s: p.state, c: p.crop, p: p.prog, w: p.wet })) })); } catch (e) {}
+  scheduleCloudSave();
 }
 addEventListener('beforeunload', save);
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
