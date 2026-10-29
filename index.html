@@ -143,7 +143,7 @@ canvas{display:block;position:fixed;inset:0}
 <div id="auth"><div id="authbox" class="glass">
   <h2>👤 하르방 계정</h2>
   <div id="authin">
-    <input id="aemail" type="email" placeholder="이메일" autocomplete="email">
+    <input id="aemail" type="text" placeholder="닉네임" maxlength="20" autocomplete="username">
     <input id="apass" type="password" placeholder="비밀번호 (6자 이상)" autocomplete="current-password">
     <div id="authmsg"></div>
     <div class="arow"><button class="btn sm" id="aLogin">로그인</button><button class="btn sm" id="aSignup">회원가입</button></div>
@@ -702,16 +702,16 @@ async function openAuth() {
   $('authmsg').textContent = st.mode === 'off' ? 'Supabase 설정이 필요해요' : '';
   $('authin').style.display = st.mode === 'user' ? 'none' : '';
   $('authout').style.display = st.mode === 'user' ? '' : 'none';
-  $('authwho').textContent = st.mode === 'user' ? `${st.email} 님으로 로그인 중` : '';
+  $('authwho').textContent = st.mode === 'user' ? `${st.name} 님으로 로그인 중` : '';
   $('aSignup').title = '지금 진행 상황을 계정으로 만들어요';
   sfx('open'); $('auth').classList.add('open');
 }
 const closeAuth = () => $('auth').classList.remove('open');
 async function submitAuth(fn) {
-  const email = $('aemail').value.trim(), pw = $('apass').value;
-  if (!email || pw.length < 6) { $('authmsg').textContent = '이메일과 6자 이상 비밀번호를 입력해 주세요'; sfx('err'); return; }
+  const nick = $('aemail').value.trim(), pw = $('apass').value;
+  if (!nick || pw.length < 6) { $('authmsg').textContent = '닉네임과 6자 이상 비밀번호를 입력해 주세요'; sfx('err'); return; }
   $('authmsg').textContent = '잠시만요…';
-  const r = await fn(email, pw);
+  const r = await fn(nick, pw);
   $('authmsg').textContent = r.message; sfx(r.ok ? 'level' : 'err');
   if (r.ok) { $('apass').value = ''; setTimeout(closeAuth, 1800); }
 }
