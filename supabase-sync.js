@@ -4,18 +4,25 @@ const SYNC_KEY = 'dolhareubang_jeju_v1';
 const STAMP_KEY = SYNC_KEY + '_cloud_at';
 let client = null;
 let userId = null;
+let user = null;
 let timer = null;
+let ready = null;
 
-async function init() {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
-  try {
-    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
-    client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    let { data: { session } } = await client.auth.getSession();
-    if (!session) ({ data: { session } } = await client.auth.signInAnonymously());
-    userId = session && session.user.id;
-    return !!userId;
-  } catch (e) { console.warn('[supabase] init failed', e); return false; }
+function init() {
+  if (ready) return ready;
+  ready = (async () => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
+    try {
+      const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
+      client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      let { data: { session } } = await client.auth.getSession();
+      if (!session) ({ data: { session } } = await client.auth.signInAnonymously());
+      user = session && session.user;
+      userId = user && user.id;
+      return !!userId;
+    } catch (e) { console.warn('[supabase] init failed', e); return false; }
+  })();
+  return ready;
 }
 
 // Pull the cloud save; if it is newer than the local one, store it locally and reload once.
@@ -48,4 +55,42 @@ export function scheduleCloudSave() {
 
 export async function startCloudSync() {
   if (await init()) await pull();
+}
+
+/* ---- email / password accounts ---- */
+
+// 'guest' (anonymous), 'user' (email account) or 'off' (Supabase not configured)
+export async function authState() {
+  if (!(await init())) return { mode: 'off' };
+  return user.is_anonymous ? { mode: 'guest' } : { mode: 'user', email: user.email };
+}
+
+const fail = error => ({ ok: false, message: error.message });
+
+// Turns the current guest into an email account, so the existing progress is kept.
+export async function signUp(email, password) {
+  if (!(await init())) return { ok: false, message: 'Supabase 설정이 필요해요' };
+  const { error } = await client.auth.updateUser({ email, password });
+  if (error) return fail(error);
+  await push();
+  return { ok: true, message: '가입 완료! 확인 메일이 오면 링크를 눌러 주세요 📧' };
+}
+
+export async function signIn(email, password) {
+  if (!(await init())) return { ok: false, message: 'Supabase 설정이 필요해요' };
+  const { data, error } = await client.auth.signInWithPassword({ email, password });
+  if (error) return fail(error);
+  user = data.user; userId = user.id;
+  localStorage.removeItem(STAMP_KEY); // let the account's own cloud save win
+  await pull();
+  return { ok: true, message: '로그인 성공!' };
+}
+
+export async function signOut() {
+  if (!(await init())) return;
+  await push(); // flush the latest progress before leaving the account
+  await client.auth.signOut();
+  localStorage.removeItem(SYNC_KEY);
+  localStorage.removeItem(STAMP_KEY);
+  location.reload();
 }
