@@ -68,7 +68,7 @@ export async function authState() {
 // Nicknames are mapped to a throw-away address so players never need a real email.
 const hex = t => [...new TextEncoder().encode(t)].map(b => b.toString(16).padStart(2, '0')).join('');
 const unhex = h => new TextDecoder().decode(Uint8Array.from(h.match(/../g) || [], x => parseInt(x, 16)));
-const toEmail = nick => hex(nick.trim().toLowerCase()) + '@dolhareubang.example';
+const toEmail = nick => hex(nick.trim().toLowerCase()) + '@dolhareubang.app';
 const friendly = m => /already|registered/i.test(m) ? '이미 사용 중인 닉네임이에요' : /invalid login/i.test(m) ? '닉네임 또는 비밀번호가 달라요' : m;
 const fail = error => ({ ok: false, message: friendly(error.message) });
 
