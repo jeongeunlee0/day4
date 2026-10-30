@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Universe</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
+  canvas { display: block; }
+  #hud { position: fixed; left: 16px; bottom: 16px; right: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  #hud button {
+    background: rgba(20,30,60,.55); color: #cfe0ff; border: 1px solid rgba(140,170,255,.35);
+    padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: 14px; backdrop-filter: blur(6px);
+  }
+  #hud button.on { background: rgba(90,130,255,.55); color: #fff; }
+  #title { position: fixed; left: 16px; top: 14px; color: #9db6ff; font-size: 13px; letter-spacing: .08em; opacity: .8; pointer-events: none; }
+  .label { position: fixed; left: 0; top: 0; color: #cfe0ff; font-size: 12px; pointer-events: none; white-space: nowrap;
+    text-shadow: 0 0 4px #000, 0 0 8px #000; will-change: transform; }
+  .label::before { content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: #9db6ff; margin-right: 6px; vertical-align: middle; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="title">UNIVERSE · 드래그: 회전 / 휠: 줌 (자유 시점)</div>
+<div id="hud"></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const rand = (a = 1, b) => (b === undefined ? Math.random() * a : a + Math.random() * (b - a));
+const gauss = () => Math.random() + Math.random() + Math.random() - 1.5;
+const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.3, 9000);
+camera.position.set(0, 200, 520);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxDistance = 3000;
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .7, .6, 1.0));
+composer.addPass(new OutputPass());
+
+/* ---------- helpers ---------- */
+function makeTex(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const glowTex = makeTex(128, 128, (g, w, h) => {
+  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.25, 'rgba(255,255,255,.55)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, w, h);
+});
+function glow(color, size, opacity = 1) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTex, color, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false
+  }));
+  s.scale.setScalar(size);
+  return s;
+}
+
+const TEX_BASE = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/textures/planets/';
+const loader = new THREE.TextureLoader();
+const loadTex = (f, srgb = true) => {
+  const t = loader.load(TEX_BASE + f);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+};
+
+/* ---------- 셰이더 ---------- */
+const NOISE = /* glsl */`
+float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+vec3 hash3(vec3 p){
+  p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)));
+  return fract(sin(p) * 43758.5453123);
+}
+float noise(vec3 x){
+  vec3 i = floor(x), f = fract(x); f = f * f * (3. - 2. * f);
+  return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm(vec3 p){ float a = .5, s = 0.; for (int i = 0; i < 6; i++) { s += a * noise(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= .5; } return s; }
+float cell(vec3 p){
+  vec3 i = floor(p), f = fract(p); float d = 1.;
+  for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+    vec3 g = vec3(float(x), float(y), float(z)); d = min(d, length(g + hash3(i + g) - f));
+  }
+  return d;
+}`;
+const VERT = /* glsl */`
+varying vec3 vObj; varying vec3 vN; varying vec3 vW; varying vec2 vUv;
+void main(){
+  vObj = position; vUv = uv; vN = normalize(mat3(modelMatrix) * normal);
+  vec4 w = modelMatrix * vec4(position, 1.); vW = w.xyz;
+  gl_Position = projectionMatrix * viewMatrix * w;
+}`;
+const TAIL = `
+#include <tonemapping_fragment>
+#include <colorspace_fragment>`;
+
+const planetFrag = /* glsl */`
+uniform float uType, uSeed, uCrater, uCap, uFreq, uTurb, uAtmo;
+uniform vec3 c1, c2, c3, c4, uAtmoCol, uSpot;
+varying vec3 vObj; varying vec3 vN; varying vec3 vW;
+${NOISE}
+void main(){
+  vec3 p = normalize(vObj), col;
+  if (uType < .5) { // 암석 행성 / 위성
+    float n = fbm(p * 3. + uSeed), m = fbm(p * 10. + uSeed * 2.);
+    col = mix(c1, c2, smoothstep(.3, .7, n));
+    col = mix(col, c3, smoothstep(.45, .75, m) * .55);
+    float cr = cell(p * 6. + uSeed), cr2 = cell(p * 15. + uSeed * 3.);
+    col *= 1. - uCrater * (.38 * smoothstep(.2, .08, cr) + .25 * smoothstep(.2, .08, cr2));
+    col += uCrater * .09 * (smoothstep(.2, .25, cr) * smoothstep(.33, .25, cr) + smoothstep(.2, .25, cr2) * smoothstep(.3, .25, cr2));
+    float cap = smoothstep(.8, .9, abs(p.y) + (fbm(p * 7.) - .5) * .12);
+    col = mix(col, vec3(.93, .95, 1.), cap * uCap);
+  } else { // 가스 행성
+    float lat = p.y;
+    float warp = fbm(vec3(p.x * 2., lat * 7., p.z * 2.) + uSeed) * uTurb;
+    float bands = sin((lat + warp * .18) * uFreq) * .5 + .5;
+    float fine = fbm(vec3(p.x * 3., lat * 38., p.z * 3.) + warp * 2.);
+    float b = mix(bands, fine, .45);
+    col = mix(c1, c2, b);
+    col = mix(col, c3, smoothstep(.5, .9, fbm(vec3(p.x * 6., lat * 14., p.z * 6.) + uSeed)) * .65);
+    if (uSpot.z > 0.) {
+      vec2 d = vec2(atan(p.z, p.x) - uSpot.x, (lat - uSpot.y) * 2.2);
+      d.x = mod(d.x + 3.14159, 6.28318) - 3.14159;
+      float s = length(d * vec2(.9, 1.) + vec2(fbm(p * 8.), fbm(p * 8. + 5.)) * .08 - .04);
+      col = mix(col, c4, smoothstep(uSpot.z, uSpot.z * .35, s) * .92);
+    }
+  }
+  vec3 N = normalize(vN), L = normalize(-vW), V = normalize(cameraPosition - vW);
+  float ndl = dot(N, L);
+  vec3 lit = col * (max(ndl, 0.) * smoothstep(-.05, .25, ndl) * 1.7 + .012);
+  float fres = pow(1. - max(dot(N, V), 0.), 3.);
+  lit += uAtmoCol * fres * uAtmo * smoothstep(-.25, .5, ndl) * .8;
+  gl_FragColor = vec4(lit, 1.);
+  ${TAIL}
+}`;
+
+function planetMat(o) {
+  const C = v => new THREE.Color(v);
+  return new THREE.ShaderMaterial({
+    vertexShader: VERT, fragmentShader: planetFrag,
+    uniforms: {
+      uType: { value: o.gas ? 1 : 0 }, uSeed: { value: rand(20) }, uCrater: { value: o.crater ?? 0 }, uCap: { value: o.cap ?? 0 },
+      uFreq: { value: o.freq ?? 10 }, uTurb: { value: o.turb ?? 0 }, uAtmo: { value: o.atmo ?? 0 },
+      c1: { value: C(o.c1) }, c2: { value: C(o.c2) }, c3: { value: C(o.c3 ?? o.c2) }, c4: { value: C(o.c4 ?? o.c1) },
+      uAtmoCol: { value: C(o.atmoCol ?? 0xffffff) }, uSpot: { value: new THREE.Vector3(...(o.spot ?? [0, 0, 0])) }
+    }
+  });
+}
+
+function atmosphere(r, color, k = 1) {
+  return new THREE.Mesh(new THREE.SphereGeometry(r * 1.1, 48, 32), new THREE.ShaderMaterial({
+    vertexShader: VERT, side: THREE.BackSide, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    uniforms: { uCol: { value: new THREE.Color(color) }, uK: { value: k } },
+    fragmentShader: `
+      uniform vec3 uCol; uniform float uK; varying vec3 vN; varying vec3 vW; varying vec3 vObj; varying vec2 vUv;
+      void main(){
+        vec3 N = normalize(vN), V = normalize(cameraPosition - vW), L = normalize(-vW);
+        float edge = clamp(-dot(N, V), 0., 1.);
+        float I = pow(edge, 2.2) * 6. * uK * smoothstep(-.35, .55, dot(N, L));
+        gl_FragColor = vec4(uCol * I, 1.);
+        ${TAIL}
+      }`
+  }));
+}
+
+/* ---------- 배경: 별, 은하수, 은하, 성운 ---------- */
+function makeStars(N, size, rmin, rmax, bright) {
+  const pos = new Float32Array(N * 3), col = new Float32Array(N * 3), c = new THREE.Color();
+  for (let i = 0; i < N; i++) {
+    const v = new THREE.Vector3(gauss(), gauss(), gauss()).normalize().multiplyScalar(rand(rmin, rmax));
+    pos.set([v.x, v.y, v.z], i * 3);
+    // 별의 색: 청백(O/B) ~ 백색 ~ 황색(G/K) ~ 주황/적색(M)
+    const r = Math.random();
+    if (r < .15) c.setRGB(.65, .75, 1); else if (r < .6) c.setRGB(1, .97, .92); else if (r < .85) c.setRGB(1, .86, .62); else c.setRGB(1, .6, .4);
+    c.multiplyScalar(rand(.4, 1) * bright);
+    col.set([c.r, c.g, c.b], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return new THREE.Points(g, new THREE.PointsMaterial({
+    size, sizeAttenuation: false, vertexColors: true, map: glowTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+  }));
+}
+const starsGroup = new THREE.Group(); scene.add(starsGroup);
+starsGroup.add(makeStars(9000, 1.8, 2500, 3500, .8), makeStars(500, 4.2, 2500, 3500, 1.1));
+
+{ // 은하수
+  const mw = new THREE.Group(); mw.rotation.set(.9, 0, .5);
+  const N = 70000, pos = new Float32Array(N * 3), col = new Float32Array(N * 3), c = new THREE.Color();
+  for (let i = 0; i < N; i++) {
+    const a = rand(6.283), bulge = Math.exp(-Math.pow(Math.atan2(Math.sin(a), Math.cos(a)), 2) * 3);
+    const lat = gauss() * (.1 + .12 * bulge), R = 3200;
+    pos.set([Math.cos(a) * Math.cos(lat) * R, Math.sin(lat) * R, Math.sin(a) * Math.cos(lat) * R], i * 3);
+    c.setRGB(1, .88 + .1 * bulge, .75 + .2 * (1 - bulge)).multiplyScalar(rand(.15, .55) * (.5 + bulge));
+    col.set([c.r, c.g, c.b], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  mw.add(new THREE.Points(g, new THREE.PointsMaterial({
+    size: 1.6, sizeAttenuation: false, vertexColors: true, map: glowTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+  })));
+  for (let i = 0; i < 36; i++) {
+    const a = i / 36 * 6.283, s = glow(i % 6 === 0 ? 0xffd9a8 : 0x8a96c0, 1300, .09 + .07 * Math.exp(-Math.pow(Math.atan2(Math.sin(a), Math.cos(a)), 2) * 3));
+    s.position.set(Math.cos(a) * 3000, rand(-60, 60), Math.sin(a) * 3000); mw.add(s);
+  }
+  starsGroup.add(mw);
+}
+
+const galaxies = [];
+function makeGalaxy(R, hueIn, hueOut) {
+  const N = 30000, pos = new Float32Array(N * 3), col = new Float32Array(N * 3), c = new THREE.Color();
+  for (let i = 0; i < N; i++) {
+    const r = Math.pow(Math.random(), 1.4) * R;
+    const ang = r * 0.011 + (i % 3) * (Math.PI * 2 / 3) + gauss() * 0.5;
+    pos.set([Math.cos(ang) * r, gauss() * 18 * (1 - r / R * .7), Math.sin(ang) * r], i * 3);
+    c.setHSL(hueIn + (hueOut - hueIn) * (r / R), .8, .55 + .3 * (1 - r / R));
+    col.set([c.r, c.g, c.b], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const p = new THREE.Points(g, new THREE.PointsMaterial({
+    size: 5, vertexColors: true, map: glowTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: .9
+  }));
+  p.add(glow(0xffe2b0, R * .45, .8));
+  galaxies.push(p);
+  return p;
+}
+{
+  const g1 = makeGalaxy(520, .1, .62); g1.position.set(-1500, 600, -2300); g1.rotation.set(.9, 0, .3); scene.add(g1);
+  const g2 = makeGalaxy(300, .85, .55); g2.position.set(2000, -300, -1900); g2.rotation.set(-.6, 0, -.5); scene.add(g2);
+}
+{
+  const nebTex = makeTex(256, 256, (g, w, h) => {
+    for (let i = 0; i < 40; i++) {
+      const x = rand(60, 196), y = rand(60, 196), r = rand(30, 90);
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, 'rgba(255,255,255,.18)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    }
+  });
+  const cols = [0xff3a8c, 0x4060ff, 0x30d0b0, 0xa050ff, 0xff8040];
+  for (let i = 0; i < 8; i++) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: nebTex, color: cols[i % cols.length], transparent: true, opacity: rand(.2, .4), blending: THREE.AdditiveBlending, depthWrite: false
+    }));
+    s.position.copy(new THREE.Vector3(gauss(), gauss() * .6, gauss()).normalize().multiplyScalar(rand(2200, 3000)));
+    s.scale.setScalar(rand(1000, 1800)); scene.add(s);
+  }
+}
+
+/* ---------- 태양 ---------- */
+scene.add(new THREE.AmbientLight(0x8090c0, 0.35));
+const sunLight = new THREE.PointLight(0xfff0d8, 4, 0, 0);
+scene.add(sunLight);
+
+const sunMat = new THREE.ShaderMaterial({
+  vertexShader: VERT, uniforms: { uTime: { value: 0 } },
+  fragmentShader: `
+    uniform float uTime; varying vec3 vObj; varying vec3 vN; varying vec3 vW; varying vec2 vUv;
+    ${NOISE}
+    void main(){
+      vec3 p = normalize(vObj);
+      float g = fbm(p * 7. + vec3(0., uTime * .06, 0.)), g2 = fbm(p * 18. - uTime * .04);
+      float h = mix(g, g2, .35);
+      vec3 col = mix(vec3(.95, .28, .04), vec3(2.2, 1.45, .6), smoothstep(.3, .78, h));
+      col *= 1. - .65 * smoothstep(.64, .72, fbm(p * 3.2 + 7. + uTime * .01));
+      vec3 V = normalize(cameraPosition - vW);
+      col *= .35 + .65 * pow(max(dot(normalize(vN), V), 0.), .5);
+      gl_FragColor = vec4(col * 1.5, 1.);
+      ${TAIL}
+    }`
+});
+const sun = new THREE.Mesh(new THREE.SphereGeometry(14, 64, 64), sunMat);
+sun.add(glow(0xff9a30, 80, .55), glow(0xff5a10, 220, .25), glow(0xffe0b0, 36, .6));
+scene.add(sun);
+
+/* ---------- 행성 ---------- */
+function ringTexture(thin) {
+  const W = 1024, c = document.createElement('canvas'); c.width = W; c.height = 2;
+  const g = c.getContext('2d'), img = g.createImageData(W, 2);
+  for (let x = 0; x < W; x++) {
+    const t = x / W;
+    let d = t < .17 ? .18 : t < .55 ? .85 : t < .62 ? .04 : t < .97 ? .62 : 0;
+    if (t > .86 && t < .875) d = .05;
+    if (t < .02 || t > .96) d *= .4;
+    if (thin) d = (Math.abs(t - .5) < .06 || Math.abs(t - .8) < .03) ? .3 : 0;
+    d *= .7 + .3 * Math.sin(t * 190) * Math.sin(t * 53 + 1) + (Math.random() - .5) * .12;
+    const tone = .85 + .15 * Math.sin(t * 37);
+    for (let y = 0; y < 2; y++) {
+      const i = (y * W + x) * 4;
+      img.data[i] = 225 * tone; img.data[i + 1] = 205 * tone; img.data[i + 2] = 165 * tone; img.data[i + 3] = Math.max(0, Math.min(1, d)) * 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+function ringMesh(inner, outer, thin) {
+  const g = new THREE.RingGeometry(inner, outer, 160, 1), p = g.attributes.position, uv = g.attributes.uv, v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); uv.setXY(i, (v.length() - inner) / (outer - inner), .5); }
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    map: ringTexture(thin), transparent: true, side: THREE.DoubleSide, roughness: 1, emissive: 0x2a2218, depthWrite: false
+  }));
+  m.rotation.x = -Math.PI / 2; return m;
+}
+
+// 지구용 셰이더 (낮/밤, 도시 불빛, 바다 반사, 구름, 대기)
+const earthMat = new THREE.ShaderMaterial({
+  vertexShader: VERT,
+  uniforms: {
+    tDay: { value: loadTex('earth_atmos_2048.jpg') }, tNight: { value: loadTex('earth_lights_2048.png') },
+    tSpec: { value: loadTex('earth_specular_2048.jpg', false) }, tCloud: { value: loadTex('earth_clouds_1024.png') }, uTime: { value: 0 }
+  },
+  fragmentShader: `
+    uniform sampler2D tDay, tNight, tSpec, tCloud; uniform float uTime;
+    varying vec3 vObj; varying vec3 vN; varying vec3 vW; varying vec2 vUv;
+    void main(){
+      vec3 N = normalize(vN), L = normalize(-vW), V = normalize(cameraPosition - vW);
+      float ndl = dot(N, L), dayF = smoothstep(-.12, .18, ndl), sunI = max(ndl, 0.) * 1.6 + .01;
+      vec3 day = texture2D(tDay, vUv).rgb, night = texture2D(tNight, vUv).rgb;
+      float sp = texture2D(tSpec, vUv).r;
+      float cl = texture2D(tCloud, vUv + vec2(uTime * .0025, 0.)).a;
+      vec3 lit = day * sunI * (1. - cl * .35);
+      lit = mix(lit, vec3(1.) * sunI, cl * .85);
+      vec3 H = normalize(L + V);
+      lit += vec3(1., .95, .85) * pow(max(dot(N, H), 0.), 70.) * sp * 1.4 * dayF * (1. - cl);
+      lit += night * vec3(1.6, 1.1, .6) * (1. - dayF) * (1. - cl * .8) * 1.4;
+      float fres = pow(1. - max(dot(N, V), 0.), 3.);
+      lit += vec3(.25, .55, 1.) * fres * 1.1 * smoothstep(-.2, .5, ndl);
+      lit += vec3(1., .45, .2) * fres * .5 * smoothstep(.0, .12, ndl) * smoothstep(.3, .0, ndl); // 석양 띠
+      gl_FragColor = vec4(lit, 1.);
+      ${TAIL}
+    }`
+});
+
+const planets = [], byName = {};
+function addPlanet(d) {
+  const group = new THREE.Group(), tilt = new THREE.Group(); tilt.rotation.z = d.tilt;
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(d.r, 96, 64), d.mat || planetMat(d));
+  tilt.add(mesh); group.add(tilt); scene.add(group);
+  if (d.atmoGlow) group.add(atmosphere(d.r, d.atmoGlow, d.atmoK ?? 1));
+  if (d.ring) tilt.add(ringMesh(d.r * d.ring[0], d.r * d.ring[1], d.ring[2]));
+  const orb = { a: d.a, e: d.e, inc: d.inc, w: d.w };
+  const P = { ...d, group, mesh, orb, M: rand(6.283), n: Math.PI * 2 / d.period, moons: [], label: d.name };
+  // 궤도선
+  const pts = [], tmpV = new THREE.Vector3();
+  for (let i = 0; i < 256; i++) pts.push(orbitPos(orb, i / 256 * 6.283, new THREE.Vector3()));
+  scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x7088c0, transparent: true, opacity: .2 })));
+  for (const m of d.moons || []) {
+    const mm = m.mat ? new THREE.Mesh(new THREE.SphereGeometry(m.r, 32, 24), m.mat)
+      : new THREE.Mesh(new THREE.SphereGeometry(m.r, 32, 24), planetMat({ ...m, crater: m.crater ?? .8 }));
+    group.add(mm); P.moons.push({ mesh: mm, dist: m.dist, ang: rand(6.283), speed: m.speed, incl: m.incl ?? 0 });
+  }
+  planets.push(P); byName[d.name] = P;
+  return P;
+}
+function orbitPos(o, M, out) {
+  let E = M; for (let i = 0; i < 6; i++) E -= (E - o.e * Math.sin(E) - M) / (1 - o.e * Math.cos(E));
+  out.set(o.a * (Math.cos(E) - o.e), 0, o.a * Math.sqrt(1 - o.e * o.e) * Math.sin(E));
+  return out.applyAxisAngle(X, o.inc).applyAxisAngle(Y, o.w);
+}
+
+const moonTex = loadTex('moon_1024.jpg');
+const moonMat = new THREE.MeshStandardMaterial({ map: moonTex, bumpMap: moonTex, bumpScale: 1.5, roughness: 1 });
+
+addPlanet({ name: '수성', r: 2.2, a: 32, e: .2, inc: .12, w: .5, period: 28, spin: .15, tilt: .03,
+  c1: 0x6e6a66, c2: 0xa39d94, c3: 0x4d4a48, crater: 1.2 });
+addPlanet({ name: '금성', r: 4.2, a: 51, e: .01, inc: .06, w: 1.2, period: 48, spin: -.05, tilt: 3.09, gas: true,
+  c1: 0xd9b56b, c2: 0xf0d9a0, c3: 0xb98a45, freq: 7, turb: .6, atmo: 1.4, atmoCol: 0xffd28a, atmoGlow: 0xffc874, atmoK: .8 });
+const earth = addPlanet({ name: '지구', r: 4.8, a: 73, e: .02, inc: 0, w: 2, period: 78, spin: .6, tilt: .41,
+  mat: earthMat, atmoGlow: 0x5aa0ff, atmoK: 1.2,
+  moons: [{ r: 1.25, dist: 10, speed: 1.1, mat: moonMat }] });
+addPlanet({ name: '화성', r: 3.2, a: 97, e: .09, inc: .03, w: 3.4, period: 118, spin: .55, tilt: .44,
+  c1: 0xa8502e, c2: 0xcf7e4c, c3: 0x6b3420, crater: .45, cap: 1, atmo: .6, atmoCol: 0xe8a070, atmoGlow: 0xd88a60, atmoK: .35,
+  moons: [{ r: .45, dist: 5.8, speed: 2.6, c1: 0x6a5a50, c2: 0x8a7a70 }] });
+addPlanet({ name: '목성', r: 15, a: 205, e: .05, inc: .02, w: 4.4, period: 280, spin: 1.2, tilt: .05, gas: true,
+  c1: 0xcaa882, c2: 0x8a5a3a, c3: 0xefe3cf, c4: 0xb5452c, freq: 26, turb: 1.1, spot: [1.2, -.3, .5], atmo: .5, atmoCol: 0xe8cfa8,
+  moons: [
+    { r: 1.2, dist: 26, speed: 1.6, c1: 0xd6bf5a, c2: 0xe8d98a, c3: 0xb8643a, crater: .1 },
+    { r: 1.0, dist: 32, speed: 1.1, c1: 0xd8cfc0, c2: 0xe9e2d4, c3: 0x9a6a4a, crater: .2 },
+    { r: 1.7, dist: 40, speed: .75, c1: 0x7a7468, c2: 0xa09a8c, c3: 0x5a554c },
+    { r: 1.5, dist: 50, speed: .5, c1: 0x403b36, c2: 0x6a645c, c3: 0x2a2724, crater: 1.1 }
+  ] });
+addPlanet({ name: '토성', r: 12.5, a: 268, e: .06, inc: -.03, w: 5.5, period: 380, spin: 1.1, tilt: .47, gas: true,
+  c1: 0xe6d3a4, c2: 0xb8995f, c3: 0xf3e8c8, freq: 22, turb: .35, atmo: .5, atmoCol: 0xf0dcb0, ring: [1.35, 2.35],
+  moons: [{ r: 1.6, dist: 44, speed: .6, c1: 0xd8a24f, c2: 0xe6b868, c3: 0xb88838, crater: 0, atmo: 1, atmoCol: 0xffc070 }] });
+addPlanet({ name: '천왕성', r: 8, a: 322, e: .045, inc: .013, w: 0.3, period: 520, spin: -.7, tilt: 1.7, gas: true,
+  c1: 0x9fe0e6, c2: 0x7fcad4, c3: 0xb5eef0, freq: 8, turb: .15, atmo: 1, atmoCol: 0xa0f0ff, atmoGlow: 0x80e0f0, atmoK: .6, ring: [1.5, 1.9, true] });
+addPlanet({ name: '해왕성', r: 7.6, a: 372, e: .01, inc: .03, w: 1.5, period: 640, spin: .8, tilt: .5, gas: true,
+  c1: 0x3f6fd8, c2: 0x2a4fb0, c3: 0x6a98f0, c4: 0x1b2f7a, freq: 14, turb: .9, spot: [2.6, -.35, .35], atmo: 1, atmoCol: 0x6090ff, atmoGlow: 0x4a78ff, atmoK: .7 });
+
+// 소행성 벨트 (찌그러진 암석 3종)
+const belt = new THREE.Group();
+{
+  const mats = [0x8a8580, 0x6d6560, 0x9a8c7c].map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 1 }));
+  for (let k = 0; k < 3; k++) {
+    let g = new THREE.IcosahedronGeometry(1, 2); g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g);
+    const p = g.attributes.position, v = new THREE.Vector3(), s = rand(10);
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i);
+      const n = Math.sin(v.x * 2.7 + s) * Math.cos(v.y * 3.1 + s * 2) * Math.sin(v.z * 2.3 + s * 3) + .5 * Math.sin(v.x * 7 + v.z * 5 + s);
+      v.multiplyScalar(.78 + .22 * n); p.setXYZ(i, v.x, v.y, v.z);
+    }
+    g.computeVertexNormals();
+    const N = 700, inst = new THREE.InstancedMesh(g, mats[k], N), d = new THREE.Object3D();
+    for (let i = 0; i < N; i++) {
+      const a = rand(6.283), r = rand(138, 168);
+      d.position.set(Math.cos(a) * r, gauss() * 5, Math.sin(a) * r);
+      d.rotation.set(rand(6), rand(6), rand(6));
+      d.scale.set(rand(.3, 1.4), rand(.3, 1.1), rand(.3, 1.3)).multiplyScalar(Math.random() < .03 ? 2.5 : 1);
+      d.updateMatrix(); inst.setMatrixAt(i, d.matrix);
+    }
+    belt.add(inst);
+  }
+  scene.add(belt);
+}
+
+// 혜성 (긴 타원 궤도, 태양에서 멀어지는 방향으로 꼬리)
+const comet = { orb: { a: 260, e: .86, inc: .55, w: 2.2 }, M: 2.4, n: Math.PI * 2 / 260, pos: new THREE.Vector3(), prev: new THREE.Vector3() };
+const cometGroup = new THREE.Group();
+cometGroup.add(new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 1), new THREE.MeshStandardMaterial({ color: 0x777066, roughness: 1, flatShading: true })));
+cometGroup.add(glow(0xaad8ff, 14, .8));
+scene.add(cometGroup);
+const TAIL_N = 1000, tailPos = new Float32Array(TAIL_N * 3), tailCol = new Float32Array(TAIL_N * 3);
+const tailR = Array.from({ length: TAIL_N }, () => ({ t: Math.random(), a: rand(6.283), s: Math.random() }));
+const tailGeo = new THREE.BufferGeometry();
+tailGeo.setAttribute('position', new THREE.BufferAttribute(tailPos, 3));
+tailGeo.setAttribute('color', new THREE.BufferAttribute(tailCol, 3));
+const cometTail = new THREE.Points(tailGeo, new THREE.PointsMaterial({
+  size: 2.4, map: glowTex, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+}));
+cometTail.frustumCulled = false; scene.add(cometTail);
+const cTmp = { dir: new THREE.Vector3(), curve: new THREE.Vector3(), u: new THREE.Vector3(), v: new THREE.Vector3() };
+function updateComet(dt) {
+  comet.prev.copy(comet.pos);
+  comet.M += dt * comet.n * (1 + 2 * Math.exp(-comet.pos.length() / 80)); // 근일점 부근에서 약간 빠르게
+  orbitPos(comet.orb, comet.M, comet.pos);
+  cometGroup.position.copy(comet.pos); cometGroup.rotation.y += dt;
+  const dist = comet.pos.length(), len = THREE.MathUtils.clamp(9000 / dist, 6, 150);
+  cTmp.dir.copy(comet.pos).normalize();
+  cTmp.curve.copy(comet.pos).sub(comet.prev).normalize().multiplyScalar(-1);
+  cTmp.u.crossVectors(cTmp.dir, Y).normalize(); cTmp.v.crossVectors(cTmp.dir, cTmp.u);
+  const c = new THREE.Color();
+  for (let i = 0; i < TAIL_N; i++) {
+    const r = tailR[i], ion = i < TAIL_N / 2, t = r.t, w = (ion ? .025 : .1) * len * t * r.s;
+    const bend = ion ? 0 : t * t * len * .35;
+    tailPos[i * 3] = comet.pos.x + cTmp.dir.x * t * len + cTmp.curve.x * bend + (cTmp.u.x * Math.cos(r.a) + cTmp.v.x * Math.sin(r.a)) * w;
+    tailPos[i * 3 + 1] = comet.pos.y + cTmp.dir.y * t * len + cTmp.curve.y * bend + (cTmp.u.y * Math.cos(r.a) + cTmp.v.y * Math.sin(r.a)) * w;
+    tailPos[i * 3 + 2] = comet.pos.z + cTmp.dir.z * t * len + cTmp.curve.z * bend + (cTmp.u.z * Math.cos(r.a) + cTmp.v.z * Math.sin(r.a)) * w;
+    const k = (1 - t) * (1 - t) * Math.min(1, 220 / dist);
+    ion ? c.setRGB(.35, .65, 1) : c.setRGB(1, .9, .7);
+    c.multiplyScalar(k * .8); tailCol.set([c.r, c.g, c.b], i * 3);
+  }
+  tailGeo.attributes.position.needsUpdate = true; tailGeo.attributes.color.needsUpdate = true;
+}
+updateComet(0);
+
+/* ---------- 우주선 ---------- */
+const ship = new THREE.Group();
+const shipBody = new THREE.Group();
+ship.add(shipBody);
+const trailEngines = [];
+{
+  const hull = new THREE.MeshStandardMaterial({ color: 0xdfe6ee, metalness: .7, roughness: .3 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2c3647, metalness: .8, roughness: .4 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(.6, 3.4, 8, 16), hull);
+  body.rotation.x = Math.PI / 2; body.scale.set(1, 1, .8); shipBody.add(body);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(.6, 1.6, 16), dark);
+  nose.rotation.x = Math.PI / 2; nose.position.z = 3; shipBody.add(nose);
+  const cockpit = new THREE.Mesh(new THREE.SphereGeometry(.5, 20, 16),
+    new THREE.MeshStandardMaterial({ color: 0x66ccff, emissive: 0x1a6aa0, emissiveIntensity: .8, metalness: .9, roughness: .1 }));
+  cockpit.scale.set(.8, .7, 1.8); cockpit.position.set(0, .45, 1.1); shipBody.add(cockpit);
+
+  for (const s of [-1, 1]) {
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(2.8, .1, 1.8), hull);
+    wing.position.set(s * 1.8, 0, -.8); wing.rotation.z = s * -.12; wing.rotation.y = s * .35; shipBody.add(wing);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(.08, .9, 1.1), dark);
+    fin.position.set(s * 3.1, .35, -1.3); shipBody.add(fin);
+    const eng = new THREE.Mesh(new THREE.CylinderGeometry(.32, .42, 1.3, 14), dark);
+    eng.rotation.x = Math.PI / 2; eng.position.set(s * .75, -.1, -2); shipBody.add(eng);
+    const flame = glow(0x66b3ff, 3.2, 1); flame.position.set(s * .75, -.1, -2.9); shipBody.add(flame);
+    const core = glow(0xffffff, 1.3, 1); core.position.copy(flame.position); shipBody.add(core);
+    const nav = glow(s < 0 ? 0xff2030 : 0x30ff60, 1.2, 1); nav.position.set(s * 3.2, .1, -1.3); shipBody.add(nav);
+    trailEngines.push(new THREE.Vector3(s * .75, -.1, -3));
+  }
+  const eLight = new THREE.PointLight(0x70b0ff, 40, 30, 1.6); eLight.position.set(0, 0, -3.5); shipBody.add(eLight);
+  scene.add(ship);
+}
+
+const TRAIL_N = 110;
+const trails = trailEngines.map(() => {
+  const pos = new Float32Array(TRAIL_N * 3), col = new Float32Array(TRAIL_N * 3), c = new THREE.Color();
+  for (let i = 0; i < TRAIL_N; i++) {
+    c.set(0x5aa8ff).multiplyScalar(Math.pow(1 - i / TRAIL_N, 2)); col.set([c.r, c.g, c.b], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const p = new THREE.Points(g, new THREE.PointsMaterial({
+    size: 1.6, map: glowTex, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+  }));
+  p.frustumCulled = false; scene.add(p);
+  return { pos, geo: g, init: false };
+});
+
+/* ---------- 고양이 (우주 헬멧 쓴) ---------- */
+function makeCat(furColor) {
+  const root = new THREE.Group(), body = new THREE.Group();
+  root.add(body);
+  const fur = new THREE.MeshStandardMaterial({ color: furColor, roughness: .9 });
+  const stripe = new THREE.MeshStandardMaterial({ color: new THREE.Color(furColor).multiplyScalar(.55), roughness: .9 });
+  const cream = new THREE.MeshStandardMaterial({ color: 0xfff1e0, roughness: .9 });
+  const pink = new THREE.MeshStandardMaterial({ color: 0xff8fa8, roughness: .7 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: .3 });
+  const add = (geo, mat, x, y, z, parent = body) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); parent.add(m); return m; };
+
+  add(new THREE.SphereGeometry(.6, 24, 20), fur, 0, 0, 0).scale.set(.85, .8, 1.3);
+  for (const z of [-.45, -.15, .15]) {
+    const s = add(new THREE.TorusGeometry(.5 - Math.abs(z) * .1, .05, 8, 24), stripe, 0, 0, z);
+    s.scale.set(.88, .82, 1);
+  }
+  add(new THREE.SphereGeometry(.4, 16, 12), cream, 0, -.25, .2).scale.set(.9, .6, 1.2);
+
+  const head = new THREE.Group(); head.position.set(0, .5, .85); body.add(head);
+  add(new THREE.SphereGeometry(.5, 28, 24), fur, 0, 0, 0, head).scale.set(1.1, .95, 1);
+  add(new THREE.SphereGeometry(.2, 16, 12), cream, 0, -.14, .38, head).scale.set(1.3, .8, .8);
+  for (const s of [-1, 1]) {
+    const ear = add(new THREE.ConeGeometry(.2, .38, 4), fur, s * .3, .45, -.02, head); ear.rotation.z = -s * .35;
+    const inner = add(new THREE.ConeGeometry(.12, .26, 4), pink, s * .3, .43, .06, head); inner.rotation.z = -s * .35;
+    add(new THREE.SphereGeometry(.1, 12, 12), black, s * .2, .08, .43, head).scale.set(1, 1.25, .6);
+    add(new THREE.SphereGeometry(.03, 8, 8), cream, s * .2 + .025, .13, .48, head);
+    for (const a of [-.25, 0, .25]) {
+      const w = add(new THREE.CylinderGeometry(.006, .006, .5, 4), cream, s * .5, -.1 + a * .15, .38, head);
+      w.rotation.z = Math.PI / 2; w.rotation.y = s * a * .8;
+    }
+  }
+  add(new THREE.SphereGeometry(.05, 10, 10), pink, 0, -.03, .5, head).scale.set(1.3, .9, .8);
+
+  add(new THREE.SphereGeometry(.86, 32, 24), new THREE.MeshPhysicalMaterial({
+    color: 0xaaddff, transparent: true, opacity: .2, roughness: 0, metalness: 0, side: THREE.DoubleSide, depthWrite: false
+  }), 0, .02, .02, head);
+  add(new THREE.TorusGeometry(.62, .07, 10, 32), new THREE.MeshStandardMaterial({ color: 0xb8bcc4, metalness: .6, roughness: .4 }), 0, -.58, 0, head).rotation.x = Math.PI / 2;
+
+  const arms = [], legs = [];
+  for (const s of [-1, 1]) {
+    for (const [z, list] of [[.5, arms], [-.5, legs]]) {
+      const p = new THREE.Group(); p.position.set(s * .3, -.2, z); body.add(p);
+      add(new THREE.CapsuleGeometry(.13, .38, 4, 8), fur, 0, -.28, 0, p);
+      add(new THREE.SphereGeometry(.16, 12, 10), cream, 0, -.55, .04, p).scale.set(1, .7, 1.2);
+      list.push(p);
+    }
+  }
+  const tail = new THREE.Group(); tail.position.set(0, .1, -.75); body.add(tail);
+  const t1 = add(new THREE.CapsuleGeometry(.1, .7, 4, 8), fur, 0, .35, -.2, tail); t1.rotation.x = -.5;
+  add(new THREE.SphereGeometry(.12, 10, 10), stripe, 0, .72, -.38, tail);
+
+  const lamp = new THREE.PointLight(0xfff4d0, 10, 12, 1.8); lamp.position.set(0, 1.4, 1.8); body.add(lamp);
+  root.userData = { body, arms, legs, tail };
+  return root;
+}
+const astronauts = [makeCat(0xf0a050), makeCat(0x9aa0aa)];
+astronauts.forEach((a, i) => { a.scale.setScalar(2.4); a.userData.seed = i * 3.1; scene.add(a); });
+
+/* ---------- 경로 ---------- */
+const shipCurve = new THREE.CatmullRomCurve3(
+  Array.from({ length: 14 }, (_, i) => {
+    const a = i / 14 * Math.PI * 2, r = 135 + 40 * Math.sin(3 * a);
+    return new THREE.Vector3(Math.cos(a) * r, 28 * Math.sin(2 * a + 1), Math.sin(a) * r);
+  }), true, 'catmullrom', .5);
+const astroCurve = new THREE.CatmullRomCurve3(
+  Array.from({ length: 12 }, (_, i) => {
+    const a = i / 12 * Math.PI * 2 + .6, r = 125 + 22 * Math.sin(2 * a + 2);
+    return new THREE.Vector3(Math.cos(a) * r, 10 * Math.sin(3 * a) + 6, Math.sin(a) * r);
+  }), true, 'catmullrom', .5);
+const shipLen = shipCurve.getLength(), astroLen = astroCurve.getLength();
+const SHIP_SPEED = 34, ASTRO_SPEED = 4.5;
+
+/* ---------- 이름표 ---------- */
+const labelTargets = [{ name: '태양', obj: sun }, ...planets.map(p => ({ name: p.name, obj: p.group })), { name: '혜성', obj: cometGroup }, { name: '우주선', obj: ship }];
+labelTargets.forEach(l => {
+  l.el = document.createElement('div'); l.el.className = 'label'; l.el.textContent = l.name; document.body.appendChild(l.el);
+});
+let showLabels = true;
+const lv = new THREE.Vector3();
+
+/* ---------- 카메라 모드 ---------- */
+const MODES = [
+  ['tour', '자동 투어'], ['free', '자유 시점'], ['ship', '우주선 추적'], ['astro', '고양이 추적'], ['watch', '조우 관전'],
+  ['earth', '지구'], ['saturn', '토성'], ['jupiter', '목성']
+];
+let mode = 'tour';
+const hud = document.getElementById('hud');
+const buttons = {};
+for (const [id, label] of MODES) {
+  const b = document.createElement('button');
+  b.textContent = label; b.onclick = () => setMode(id);
+  hud.appendChild(b); buttons[id] = b;
+}
+const lb = document.createElement('button');
+lb.textContent = '이름표'; lb.classList.add('on');
+lb.onclick = () => { showLabels = !showLabels; lb.classList.toggle('on', showLabels); };
+hud.appendChild(lb);
+function setMode(m) {
+  mode = m;
+  controls.enabled = m === 'free';
+  if (m === 'free') controls.target.set(0, 0, 0);
+  for (const k in buttons) buttons[k].classList.toggle('on', k === m);
+}
+setMode('tour');
+
+const TOUR = ['orbit', 'earth', 'ship', 'saturn', 'astro', 'jupiter', 'watch', 'orbit'];
+const FOCUS = { earth: ['지구', 4.6], saturn: ['토성', 6.5], jupiter: ['목성', 4] };
+const lookAtPos = new THREE.Vector3(), wantPos = new THREE.Vector3(), wantLook = new THREE.Vector3(), tmp = new THREE.Vector3();
+let roll = 0;
+
+/* ---------- 루프 ---------- */
+const clock = new THREE.Clock();
+let T = 0;
+function tick() {
+  const dt = Math.min(clock.getDelta(), .05);
+  T += dt;
+
+  sunMat.uniforms.uTime.value = T; earthMat.uniforms.uTime.value = T;
+  sun.rotation.y += dt * .02;
+  for (const p of planets) {
+    p.M += dt * p.n; orbitPos(p.orb, p.M, p.group.position);
+    p.mesh.rotation.y += dt * p.spin;
+    for (const m of p.moons) {
+      m.ang += dt * m.speed;
+      m.mesh.position.set(Math.cos(m.ang) * m.dist, Math.sin(m.ang) * m.dist * Math.sin(m.incl), Math.sin(m.ang) * m.dist);
+      m.mesh.rotation.y = -m.ang + Math.PI / 2; // 동주기 자전
+    }
+  }
+  updateComet(dt);
+  belt.rotation.y += dt * .01;
+  galaxies.forEach(g => g.rotation.y += dt * .01);
+  starsGroup.rotation.y += dt * .002;
+
+  // 우주선
+  const us = (T * SHIP_SPEED / shipLen) % 1;
+  ship.position.copy(shipCurve.getPointAt(us));
+  ship.lookAt(shipCurve.getPointAt((us + .003) % 1));
+  const t0 = shipCurve.getTangentAt(us), t1 = shipCurve.getTangentAt((us + .01) % 1);
+  const turn = t0.z * t1.x - t0.x * t1.z;
+  roll += (THREE.MathUtils.clamp(-turn * 9, -.8, .8) - roll) * Math.min(1, dt * 3);
+  shipBody.rotation.z = roll + Math.sin(T * 1.7) * .03;
+  shipBody.position.y = Math.sin(T * 2.3) * .08;
+  ship.updateMatrixWorld(true);
+  trails.forEach((tr, i) => {
+    const w = trailEngines[i].clone().applyMatrix4(shipBody.matrixWorld);
+    if (!tr.init) { for (let k = 0; k < TRAIL_N; k++) tr.pos.set([w.x, w.y, w.z], k * 3); tr.init = true; }
+    tr.pos.copyWithin(3, 0, (TRAIL_N - 1) * 3);
+    tr.pos.set([w.x, w.y, w.z], 0);
+    tr.geo.attributes.position.needsUpdate = true;
+  });
+
+  // 고양이
+  astronauts.forEach((a, i) => {
+    const ua = (T * ASTRO_SPEED / astroLen + i * .035) % 1;
+    a.position.copy(astroCurve.getPointAt(ua));
+    a.position.y += Math.sin(T * .8 + i) * .6;
+    const { body, arms, legs, tail, seed } = a.userData;
+    body.rotation.set(Math.sin(T * .3 + seed) * .5, T * .33 + seed * 2, Math.sin(T * .4 + seed) * .6);
+    tail.rotation.y = Math.sin(T * 3 + seed) * .6;
+    arms[0].rotation.z = -.5 + Math.sin(T * 1.3 + seed) * .45;
+    arms[1].rotation.z = .5 - Math.sin(T * 1.1 + seed) * .45;
+    arms[0].rotation.x = Math.sin(T * .9 + seed) * .3;
+    legs[0].rotation.x = Math.sin(T * 1.0 + seed) * .3;
+    legs[1].rotation.x = -Math.sin(T * 1.0 + seed) * .3;
+  });
+
+  // 카메라
+  let eff = mode;
+  if (mode === 'tour') eff = TOUR[Math.floor(T / 10) % TOUR.length];
+  if (mode === 'free') {
+    controls.update();
+  } else {
+    if (eff === 'orbit') {
+      wantPos.set(Math.cos(T * .05) * 480, 170 + Math.sin(T * .1) * 50, Math.sin(T * .05) * 480);
+      wantLook.set(0, 0, 0);
+    } else if (FOCUS[eff]) {
+      const [name, k] = FOCUS[eff], P = byName[name], dist = P.r * k;
+      tmp.copy(P.group.position).setY(0).normalize().multiplyScalar(-1).applyAxisAngle(Y, .75).multiplyScalar(dist);
+      wantPos.copy(P.group.position).add(tmp).y += dist * .25;
+      wantLook.copy(P.group.position);
+    } else if (eff === 'ship') {
+      wantPos.set(0, 4.5, -17).applyQuaternion(ship.quaternion).add(ship.position);
+      wantLook.set(0, 0, 14).applyQuaternion(ship.quaternion).add(ship.position);
+    } else if (eff === 'astro') {
+      const a = astronauts[0];
+      tmp.copy(a.position).setY(0).normalize().multiplyScalar(-12).add(new THREE.Vector3(0, 3, 0));
+      wantPos.copy(a.position).add(tmp);
+      wantLook.copy(a.position);
+    } else { // watch
+      const a = astronauts[1];
+      wantPos.copy(a.position).add(tmp.set(-6, 3, -9));
+      wantLook.copy(ship.position);
+    }
+    camera.position.lerp(wantPos, 1 - Math.exp(-dt * (eff === 'ship' ? 5 : 1.8)));
+    lookAtPos.lerp(wantLook, 1 - Math.exp(-dt * 3.5));
+    camera.lookAt(lookAtPos);
+  }
+
+  // 이름표
+  camera.updateMatrixWorld();
+  for (const l of labelTargets) {
+    l.obj.getWorldPosition(lv);
+    const dist = lv.distanceTo(camera.position);
+    lv.project(camera);
+    const vis = showLabels && lv.z < 1 && Math.abs(lv.x) < 1.05 && Math.abs(lv.y) < 1.05 && dist > 8;
+    l.el.style.display = vis ? 'block' : 'none';
+    if (vis) l.el.style.transform = `translate(${(lv.x * .5 + .5) * innerWidth + 8}px, ${(-lv.y * .5 + .5) * innerHeight - 8}px)`;
+  }
+
+  composer.render();
+  requestAnimationFrame(tick);
+}
+lookAtPos.set(0, 0, 0);
+tick();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
