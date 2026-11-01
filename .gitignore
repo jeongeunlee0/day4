@@ -5,3 +5,4 @@ test/
 *.blend
 *.blend1
 render_log.txt
+__pycache__/
